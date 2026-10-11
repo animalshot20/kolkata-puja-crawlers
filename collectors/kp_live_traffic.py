@@ -345,12 +345,6 @@ def fetch_and_parse_posts(scraped_at: datetime) -> tuple[list[dict], bool]:
                 try:
                     response = page.goto(url, timeout=35000, wait_until="domcontentloaded")
                     
-                    # --- DEBUG SCREENSHOT ADDED HERE ---
-                    screenshot_path = OUTPUT_FILE.parent / "debug_screenshot.png"
-                    page.screenshot(path=str(screenshot_path))
-                    print(f"  [i] Saved debug screenshot to {screenshot_path.name}")
-                    # -----------------------------------
-
                     if response is not None and response.status >= 400:
                         print(f"[!] Facebook returned HTTP {response.status} for {page_name}.")
                         continue
