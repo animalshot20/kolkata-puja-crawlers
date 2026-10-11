@@ -3,7 +3,7 @@ name: Test KP Live Traffic
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/3 * * * *'
+    - cron: '*/5 * * * *'
 
 jobs:
   scrape_traffic:
@@ -33,5 +33,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kp-live-traffic-output
-          path: data/dynamic/live_traffic_2026.json
+          path: data/dynamic/
           retention-days: 1
