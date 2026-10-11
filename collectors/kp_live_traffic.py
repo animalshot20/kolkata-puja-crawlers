@@ -57,14 +57,11 @@ INFRASTRUCTURE_SUFFIX = (
 
 
 def clean_post_text(raw_text: str) -> str:
-    """Strip HTML and common Facebook UI text while retaining hashtags."""
     soup = BeautifulSoup(raw_text, "html.parser")
     text = soup.get_text(" ", strip=True).replace("\xa0", " ")
     text = re.sub(r"^.*?Shared with Public\s*", "", text, flags=re.IGNORECASE)
 
-    for delimiter in (
-        "All reactions:", "Like | Comment", "| Like |", "View more comments"
-    ):
+    for delimiter in ("All reactions:", "Like | Comment", "| Like |", "View more comments"):
         if delimiter in text:
             text = text.split(delimiter, 1)[0]
 
@@ -76,17 +73,13 @@ def normalize_location_name(location: str) -> str:
 
 
 def _clean_clause_prefix(clause: str) -> str:
-    return re.sub(
-        r"^\s*Traffic update\s*:-\s*\|*\s*", "", clause, flags=re.IGNORECASE
-    ).strip()
+    return re.sub(r"^\s*Traffic update\s*:-\s*\|*\s*", "", clause, flags=re.IGNORECASE).strip()
 
 
 def _location_regex(location: str) -> re.Pattern:
-    """Build a tolerant regex for names whose initials may include periods."""
     token_patterns = []
     for token in normalize_location_name(location).split():
         if token.isalpha() and len(token) <= 3:
-            # Handles RR/R.R., BT/B.T., CR/C.R., and similar abbreviated tokens.
             token_patterns.append(r"".join(re.escape(char) + r"\.?" for char in token))
         else:
             token_patterns.append(re.escape(token))
@@ -95,12 +88,9 @@ def _location_regex(location: str) -> re.Pattern:
 
 
 def extract_clause_locations(clause: str) -> list[str]:
-    """Return canonical locations plus plausible unmapped infrastructure names."""
     found = set()
     clause_clean = _clean_clause_prefix(clause)
-    lower_clause = clause_clean.lower()
 
-    # 1. Known/canonical locations. Prefer longer overlapping names.
     known_matches = []
     for loc in KNOWN_LOCATIONS:
         for match in _location_regex(loc).finditer(clause_clean):
@@ -121,7 +111,6 @@ def extract_clause_locations(clause: str) -> list[str]:
         if not contained:
             found.add(candidate["name"])
 
-    # 2. Prepositional fallback for unmapped infrastructure names.
     fallback_pattern = re.compile(
         r"\b(?:on|at|near|towards|from)\s+(?:the\s+)?"
         r"([A-Za-z0-9.\-]+(?:\s+[A-Za-z0-9.\-]+){0,2}\s+"
@@ -139,7 +128,6 @@ def extract_clause_locations(clause: str) -> list[str]:
             if not any(word in LOCATION_STOP_WORDS for word in loc.lower().split()):
                 found.add(normalize_location_name(loc))
 
-    # 3. Direct-subject fallback for a new location at the start of the clause.
     direct_pattern = re.compile(
         r"^(?:the\s+)?([A-Za-z0-9.\-]+(?:\s+[A-Za-z0-9.\-]+){0,2}\s+"
         rf"(?:{INFRASTRUCTURE_SUFFIX}))\b",
@@ -155,7 +143,6 @@ def extract_clause_locations(clause: str) -> list[str]:
         ):
             found.add(normalize_location_name(loc))
 
-    # 4. Context-aware mid-sentence fallback.
     infrastructure_pattern = re.compile(
         r"\b([A-Za-z0-9.\-]+(?:\s+[A-Za-z0-9.\-]+){0,2}\s+"
         rf"(?:{INFRASTRUCTURE_SUFFIX}))\b"
@@ -175,19 +162,11 @@ def extract_clause_locations(clause: str) -> list[str]:
 
 
 def extract_affected_locations(clause: str) -> list[str]:
-    """Prefer roads explicitly affected by traffic conditions over nearby landmarks.
-
-    Example: in "breakdown on Brabourne Road near Canning Street has obstructed
-    traffic on Brabourne Road and Howrah Bridge", Canning Street is a landmark;
-    Brabourne Road and Howrah Bridge are the explicitly affected locations.
-    """
     clause_clean = _clean_clause_prefix(clause)
     candidates = extract_clause_locations(clause_clean)
     if not candidates:
         return []
 
-    # Direct status sentence: "Red Road ... has been released ...". Its grammatical
-    # subject is a stronger signal than other locations mentioned later as landmarks.
     direct_pattern = re.compile(
         r"^(?:the\s+)?([A-Za-z0-9.\-]+(?:\s+[A-Za-z0-9.\-]+){0,2}\s+"
         rf"(?:{INFRASTRUCTURE_SUFFIX}))\b",
@@ -206,8 +185,6 @@ def extract_affected_locations(clause: str) -> list[str]:
             )
             return [canonical_match or subject]
 
-    # An explicit "traffic on/along/at/through X" phrase provides a stronger
-    # affected-road signal than an earlier "breakdown near Y" reference.
     traffic_anchor = re.search(
         r"\b(?:vehicular\s+)?traffic\s+(?:on|along|at|over|through)\s+",
         clause_clean,
@@ -220,13 +197,8 @@ def extract_affected_locations(clause: str) -> list[str]:
             for occurrence in _location_regex(candidate).finditer(clause_clean):
                 if occurrence.start() < anchor_end:
                     continue
-                # A location immediately qualified by near/from/towards is normally
-                # a landmark or direction, not part of the affected-road list.
                 between = clause_clean[anchor_end:occurrence.start()]
-                last_list_boundary = max(
-                    between.lower().rfind(" and "),
-                    between.rfind(",")
-                )
+                last_list_boundary = max(between.lower().rfind(" and "), between.rfind(","))
                 current_item_prefix = between[last_list_boundary + 5:] if last_list_boundary >= 0 and between[last_list_boundary:last_list_boundary + 5].lower() == " and " else (
                     between[last_list_boundary + 1:] if last_list_boundary >= 0 else between
                 )
@@ -248,23 +220,13 @@ def extract_clause_directions(clause: str) -> dict:
     if bound_match:
         directions["bound"] = f"{bound_match.group(1)} bound"
 
-    flank_match = re.search(
-        r"\b(southern|northern|eastern|western|middle)\s+(flank|part|side)\b",
-        clause_lower
-    )
+    flank_match = re.search(r"\b(southern|northern|eastern|western|middle)\s+(flank|part|side)\b", clause_lower)
     if flank_match:
         directions["flank"] = flank_match.group(0)
 
-    stop_words = {
-        "has", "have", "is", "are", "was", "were", "and", "towards",
-        "from", "near", "traffic", "due", "with"
-    }
+    stop_words = {"has", "have", "is", "are", "was", "were", "and", "towards", "from", "near", "traffic", "due", "with"}
     for prep in ("towards", "from", "near"):
-        pattern = (
-            fr"\b{prep}\s+([A-Za-z0-9.]"
-            + r"(?:\s+(?!" + "|".join(stop_words) + r"\b)[A-Za-z0-9.]+){0,3})"
-            + r"(?=\s|[,\.#]|$)"
-        )
+        pattern = fr"\b{prep}\s+([A-Za-z0-9.](?:\s+(?!" + "|".join(stop_words) + r"\b)[A-Za-z0-9.]+){0,3})(?=\s|[,\.#]|$)"
         match = re.search(pattern, clause_lower)
         if match:
             chunk = match.group(1).strip().rstrip(".,#").title()
@@ -274,15 +236,12 @@ def extract_clause_directions(clause: str) -> dict:
 
 
 def extract_clause_status(clause: str) -> str:
-    """Return normal, slow, closed, or unknown based on the final status phrase."""
     text = clause.lower()
     found_statuses = []
     patterns = {
         "closed": r"\b(closed|shut|no movement|not open|traffic is stopped|closure)\b",
-        "slow": r"\b(traffic is slow|traffic is moving slowly|slow|congestion|heavy traffic|"
-                r"slowed|slowed down|partially obstructed)\b",
-        "normal": r"\b(plying normally|free to vehicular traffic|free to traffic|"
-                  r"released for vehicular traffic|traffic is free|normal|cleared|released)\b"
+        "slow": r"\b(traffic is slow|traffic is moving slowly|slow|congestion|heavy traffic|slowed|slowed down|partially obstructed)\b",
+        "normal": r"\b(plying normally|free to vehicular traffic|free to traffic|released for vehicular traffic|traffic is free|normal|cleared|released)\b"
     }
     for status, pattern in patterns.items():
         for match in re.finditer(pattern, text):
@@ -302,11 +261,7 @@ def extract_clause_cause(clause: str) -> str:
 
 
 def parse_post_clauses(message: str) -> list[dict]:
-    # Split sentence ends but avoid splitting dotted road abbreviations like B.T. Road.
-    raw_clauses = re.split(
-        r"(?:;|(?i:\bwhile\b)|(?<![A-Z])\.(?=\s+[A-Z]))",
-        message
-    )
+    raw_clauses = re.split(r"(?:;|(?i:\bwhile\b)|(?<![A-Z])\.(?=\s+[A-Z]))", message)
     clause_states = []
     for clause in raw_clauses:
         if len(clause.strip()) < 10:
@@ -325,38 +280,27 @@ def parse_post_clauses(message: str) -> list[dict]:
 
 
 def parse_fb_time(time_str: str, scraped_at: datetime) -> str | None:
-    """Parse supported Facebook relative labels into explicitly approximate UTC times."""
     value = time_str.lower().strip()
-
     if value.startswith("yesterday"):
-        # Facebook's "Yesterday" label does not establish the post's age in hours.
-        # Use a conservative age beyond the 26-hour freshness window so an uncertain
-        # date-only label cannot make stale traffic look current.
         return (scraped_at - timedelta(hours=48)).isoformat()
     if value.startswith("just now") or value.startswith("a few seconds ago"):
         return scraped_at.isoformat()
-
     match_w = re.search(r"(\d+)\s*(?:w|weeks?\s*ago)\b", value)
     if match_w:
         return (scraped_at - timedelta(weeks=int(match_w.group(1)))).isoformat()
-
     match_d = re.search(r"(\d+)\s*(?:d\b|days?\s*ago\b)", value)
     if match_d:
         return (scraped_at - timedelta(days=int(match_d.group(1)))).isoformat()
-
     match_h = re.search(r"(\d+)\s*(?:h\b|hrs?\b|hours?\s*ago\b)", value)
     if match_h:
         return (scraped_at - timedelta(hours=int(match_h.group(1)))).isoformat()
-
     match_m = re.search(r"(\d+)\s*(?:m\b|mins?\b|minutes?\s*ago\b)", value)
     if match_m:
         return (scraped_at - timedelta(minutes=int(match_m.group(1)))).isoformat()
-
     return None
 
 
 def _extract_post_identity(href: str) -> tuple[str | None, str | None]:
-    """Return a stable post ID and specific URL for common Facebook URL formats."""
     absolute_url = urljoin("https://www.facebook.com/", href)
     path_match = re.search(r"/(?:posts|videos)/([^/?#]+)", absolute_url)
     story_match = re.search(r"[?&]story_fbid=([^&#]+)", absolute_url)
@@ -364,17 +308,12 @@ def _extract_post_identity(href: str) -> tuple[str | None, str | None]:
 
     if path_match:
         return path_match.group(1).strip("/"), absolute_url.split("?", 1)[0]
-
     if story_match:
         return story_match.group(1).strip("/"), absolute_url
-
     if "permalink.php" in absolute_url and fbid_match:
         return fbid_match.group(1).strip("/"), absolute_url
-
-    # Some Facebook permalink links expose fbid without the permalink.php path.
     if fbid_match and ("facebook.com" in absolute_url):
         return fbid_match.group(1).strip("/"), absolute_url
-
     return None, None
 
 
@@ -384,7 +323,11 @@ def fetch_and_parse_posts(scraped_at: datetime) -> tuple[list[dict], bool]:
     fetch_success = False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # Added args to help bypass simple bot detection
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
         try:
             context = browser.new_context(
                 user_agent=(
@@ -401,6 +344,13 @@ def fetch_and_parse_posts(scraped_at: datetime) -> tuple[list[dict], bool]:
                 print(f"Scraping official page: {page_name}...")
                 try:
                     response = page.goto(url, timeout=35000, wait_until="domcontentloaded")
+                    
+                    # --- DEBUG SCREENSHOT ADDED HERE ---
+                    screenshot_path = OUTPUT_FILE.parent / "debug_screenshot.png"
+                    page.screenshot(path=str(screenshot_path))
+                    print(f"  [i] Saved debug screenshot to {screenshot_path.name}")
+                    # -----------------------------------
+
                     if response is not None and response.status >= 400:
                         print(f"[!] Facebook returned HTTP {response.status} for {page_name}.")
                         continue
@@ -441,7 +391,6 @@ def fetch_and_parse_posts(scraped_at: datetime) -> tuple[list[dict], bool]:
                                 except (ValueError, TypeError, OverflowError, OSError):
                                     pass
 
-                            # Relative labels are accepted only if the parser understands them.
                             link_text = link.get_text(" ", strip=True)
                             if timestamp_precision != "exact" and link_text:
                                 parsed_time = parse_fb_time(link_text, scraped_at)
@@ -458,10 +407,8 @@ def fetch_and_parse_posts(scraped_at: datetime) -> tuple[list[dict], bool]:
                                 break
 
                         if not posted_at:
-                            print("  [!] Dropping post: Could not extract a reliable timestamp.")
                             continue
                         if not post_url or not post_id:
-                            print("  [!] Dropping post: Could not extract a specific Post ID/URL.")
                             continue
 
                         full_stable_id = f"KP-LIVE-FB-{post_id}"
@@ -506,10 +453,7 @@ def fetch_and_parse_posts(scraped_at: datetime) -> tuple[list[dict], bool]:
     return scraped_records, fetch_success
 
 
-def build_latest_states(
-    historical_records: list[dict], now_utc: datetime | None = None
-) -> dict:
-    """Expose only recent advisories; keep stale events in the historical ledger."""
+def build_latest_states(historical_records: list[dict], now_utc: datetime | None = None) -> dict:
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
 
@@ -530,7 +474,6 @@ def build_latest_states(
 
         age = now_utc.astimezone(timezone.utc) - posted_dt
         if age < -timedelta(minutes=FUTURE_TIMESTAMP_TOLERANCE_MINUTES):
-            # A materially future-dated source timestamp is not trustworthy.
             continue
         if age > timedelta(hours=TRAFFIC_FRESHNESS_HOURS):
             continue
@@ -551,13 +494,11 @@ def build_latest_states(
 
 
 def _merge_scraped_record(existing: dict, incoming: dict) -> dict:
-    """Refresh the current contents of an existing post without resetting relative age."""
     old_posted_at = existing.get("posted_at")
     old_precision = existing.get("timestamp_precision", "unknown")
     incoming_posted_at = incoming.get("posted_at")
     incoming_precision = incoming.get("timestamp_precision", "unknown")
 
-    # Always refresh parsed content so edits to the same Facebook post are reflected.
     merged = dict(existing)
     merged.update(incoming)
 
@@ -565,12 +506,9 @@ def _merge_scraped_record(existing: dict, incoming: dict) -> dict:
         merged["posted_at"] = incoming_posted_at
         merged["timestamp_precision"] = "exact"
     elif old_precision == "exact" and old_posted_at:
-        # Never replace a previously exact time with a moving relative-time estimate.
         merged["posted_at"] = old_posted_at
         merged["timestamp_precision"] = "exact"
     else:
-        # Keep the first stored relative timestamp so repeated scraping of "1d" or
-        # "Yesterday" cannot continually make an old post look newly fresh.
         if old_posted_at:
             merged["posted_at"] = old_posted_at
         elif incoming_posted_at:
@@ -589,6 +527,9 @@ def _merge_scraped_record(existing: dict, incoming: dict) -> dict:
 def run_collector():
     collected_at = datetime.now(timezone.utc)
     print(f"[{collected_at.isoformat()}] Starting strict-schema traffic extraction...")
+
+    # Ensure output directory exists before writing anything (including screenshots)
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     new_records, fetch_success = fetch_and_parse_posts(collected_at)
     if not fetch_success:
@@ -629,7 +570,6 @@ def run_collector():
     final_historical.sort(key=lambda item: item.get("posted_at", ""), reverse=True)
     latest_states = build_latest_states(final_historical, now_utc=collected_at)
 
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     output_payload = {
         "dataset_name": "Kolkata Live Traffic Advisories",
         "provenance": f"Official Kolkata Police Facebook Updates ({OFFICIAL_TAG})",
@@ -641,10 +581,7 @@ def run_collector():
     with open(OUTPUT_FILE, "w", encoding="utf-8") as file:
         json.dump(output_payload, file, ensure_ascii=False, indent=2)
 
-    print(
-        f"\nSuccess: Retained {len(final_historical)} historical records "
-        f"({new_count} new, {updated_count} refreshed)."
-    )
+    print(f"\nSuccess: Retained {len(final_historical)} historical records ({new_count} new, {updated_count} refreshed).")
     print(f"Derived active statuses for {len(latest_states)} locations.")
 
 
