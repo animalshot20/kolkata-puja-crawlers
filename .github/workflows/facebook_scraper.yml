@@ -46,7 +46,7 @@ jobs:
         with:
           source_file: 'data/dynamic/'
           destination_repo: 'AmanBasu20/kolkata-puja-mcp-server'
-          destination_folder: 'data/dynamic/'
+          destination_folder: 'data'
           user_email: 'github-actions[bot]@users.noreply.github.com'
           user_name: 'github-actions[bot]'
           commit_message: 'Auto-sync updated Facebook data'
