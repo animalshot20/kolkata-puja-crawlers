@@ -1,8 +1,59 @@
 {
   "dataset_name": "Kolkata Live Traffic Advisories",
   "provenance": "Official Kolkata Police Facebook Updates (#kolkatatrafficupdate)",
-  "last_collected_at": "2026-10-11T09:17:42.082288+00:00",
-  "historical_events_count": 0,
+  "last_collected_at": "2026-10-11T09:35:21.290810+00:00",
+  "historical_events_count": 2,
   "latest_state_per_location": {},
-  "historical_records": []
+  "historical_records": [
+    {
+      "id": "KP-LIVE-FB-pfbid02Jwrk9AxSwwa8WcrqhTAugC7yc1Ws8ynWUYFBQTGokvGWmoMGaYcwJ13BGSvpnk8Zl",
+      "post_id": "pfbid02Jwrk9AxSwwa8WcrqhTAugC7yc1Ws8ynWUYFBQTGokvGWmoMGaYcwJ13BGSvpnk8Zl",
+      "locations": [
+        "Red Road"
+      ],
+      "clause_states": [
+        {
+          "locations": [
+            "Red Road"
+          ],
+          "traffic_status": "closed",
+          "cause": "unknown",
+          "directions": {},
+          "raw_clause": "Traffic update:- Red Road has been closed for vehicular traffic. #Kolkatatrafficupdate"
+        }
+      ],
+      "message": "Traffic update:- Red Road has been closed for vehicular traffic. #Kolkatatrafficupdate",
+      "post_url": "https://www.facebook.com/KolkataTrafficPolice/posts/pfbid02Jwrk9AxSwwa8WcrqhTAugC7yc1Ws8ynWUYFBQTGokvGWmoMGaYcwJ13BGSvpnk8Zl",
+      "source_page": "KolkataTrafficPolice",
+      "posted_at": "2026-10-08T09:35:21.290810+00:00",
+      "timestamp_precision": "relative",
+      "collected_at": "2026-10-11T09:35:21.290810+00:00"
+    },
+    {
+      "id": "KP-LIVE-FB-pfbid0dyY6EZCzUwhUxZ2kqa5GvRVnFQ1zA2Twb8tinSbQLtfPLf9FF33SM1uGWj57JVVpl",
+      "post_id": "pfbid0dyY6EZCzUwhUxZ2kqa5GvRVnFQ1zA2Twb8tinSbQLtfPLf9FF33SM1uGWj57JVVpl",
+      "locations": [
+        "Red Road"
+      ],
+      "clause_states": [
+        {
+          "locations": [
+            "Red Road"
+          ],
+          "traffic_status": "normal",
+          "cause": "unknown",
+          "directions": {
+            "bound": "south bound"
+          },
+          "raw_clause": "Traffic update:- Red Road south bound has been released for vehicular traffic. #Kolkatatrafficupdate"
+        }
+      ],
+      "message": "Traffic update:- Red Road south bound has been released for vehicular traffic. #Kolkatatrafficupdate",
+      "post_url": "https://www.facebook.com/KolkataTrafficPolice/posts/pfbid0dyY6EZCzUwhUxZ2kqa5GvRVnFQ1zA2Twb8tinSbQLtfPLf9FF33SM1uGWj57JVVpl",
+      "source_page": "KolkataTrafficPolice",
+      "posted_at": "2026-10-08T09:35:21.290810+00:00",
+      "timestamp_precision": "relative",
+      "collected_at": "2026-10-11T09:35:21.290810+00:00"
+    }
+  ]
 }
