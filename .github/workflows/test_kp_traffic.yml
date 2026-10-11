@@ -5,12 +5,11 @@ on:
   schedule:
     - cron: '*/3 * * * *'
 
-# This permission is required for the bot to push files to your repository
 permissions:
   contents: write
 
 jobs:
-  scrape_traffic:
+  scrape_and_commit:
     runs-on: ubuntu-latest
 
     steps:
@@ -24,7 +23,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install playwright beautifulsoup4
+          pip install playwright beautifulsoup4 requests pandas tqdm openai
           playwright install --with-deps chromium
 
       - name: Ensure Output Directory Exists
@@ -33,17 +32,20 @@ jobs:
       - name: Run KP Live Traffic Scraper
         run: python collectors/kp_live_traffic.py
 
+      - name: Run Pandal Facebook Scraper
+        env:
+          SCRAPEBADGER_API_KEY: ${{ secrets.SCRAPEBADGER_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python collectors/scrape_pandal_facebook_updates_2026.py
+
+      - name: Run TomTom Traffic Monitor
+        env:
+          TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
+        run: python collectors/kolkata_traffic_monitor_updated.py --live
+
       - name: Commit and Push JSON back to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/dynamic/live_traffic_2026.json
-          # This checks if the file changed before trying to commit, preventing errors
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update live traffic data" && git push)
-
-      - name: Upload Dynamic Output as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kp-live-traffic-output
-          path: data/dynamic/live_traffic_2026.json
-          retention-days: 1
+          git add data/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update live data" && git push)
