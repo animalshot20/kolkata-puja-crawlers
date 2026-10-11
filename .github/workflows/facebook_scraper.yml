@@ -1,0 +1,52 @@
+name: Facebook Pandal Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 */3 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  facebook_sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install requests openai
+
+      - name: Ensure Output Directory
+        run: mkdir -p data/dynamic/
+
+      - name: Run Pandal Facebook Scraper
+        env:
+          SCRAPEBADGER_API_KEY: ${{ secrets.SCRAPEBADGER_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python collectors/scrape_pandal_facebook_updates_2026.py
+
+      - name: Commit and Push Locally
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update Facebook data [skip ci]" && git push)
+
+      - name: Push to MCP Server Repository
+        uses: dmnemec/copy_file_to_another_repo_action@main
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.TARGET_REPO_TOKEN }}
+        with:
+          source_file: 'data/dynamic/'
+          destination_repo: 'AmanBasu20/kolkata-puja-mcp-server'
+          destination_folder: 'data/dynamic/'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          user_name: 'github-actions[bot]'
+          commit_message: 'Auto-sync updated Facebook data'
