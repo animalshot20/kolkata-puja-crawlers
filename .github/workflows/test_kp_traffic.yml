@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '*/3 * * * *'
 
+# This permission is required for the bot to push files to your repository
+permissions:
+  contents: write
+
 jobs:
   scrape_traffic:
     runs-on: ubuntu-latest
@@ -28,6 +32,14 @@ jobs:
 
       - name: Run KP Live Traffic Scraper
         run: python collectors/kp_live_traffic.py
+
+      - name: Commit and Push JSON back to Repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/dynamic/live_traffic_2026.json
+          # This checks if the file changed before trying to commit, preventing errors
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update live traffic data" && git push)
 
       - name: Upload Dynamic Output as Artifact
         uses: actions/upload-artifact@v4
