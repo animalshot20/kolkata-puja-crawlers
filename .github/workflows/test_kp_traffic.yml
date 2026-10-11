@@ -1,0 +1,38 @@
+name: Test KP Live Traffic
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *' # Changed to run every 5 minutes
+
+jobs:
+  scrape_traffic:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install playwright beautifulsoup4
+          playwright install --with-deps chromium
+
+      - name: Ensure Output Directory Exists
+        run: mkdir -p data/dynamic/
+
+      - name: Run KP Live Traffic Scraper
+        run: python collectors/kp_live_traffic.py
+
+      - name: Upload Dynamic Output as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kp-live-traffic-output
+          path: data/dynamic/live_traffic_2026.json
+          retention-days: 1
