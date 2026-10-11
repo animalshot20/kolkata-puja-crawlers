@@ -1,15 +1,15 @@
-name: Test KP Live Traffic
+name: Kolkata Puja Crawlers Pipeline
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/3 * * * *'
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
 
 jobs:
-  scrape_and_commit:
+  scrape_and_sync:
     runs-on: ubuntu-latest
 
     steps:
@@ -43,9 +43,9 @@ jobs:
           TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
         run: python collectors/kolkata_traffic_monitor_updated.py --live
 
-      - name: Commit and Push JSON back to Repo
+      - name: Commit and Push Updated Data
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update live data" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update live data [skip ci]" && git push)
