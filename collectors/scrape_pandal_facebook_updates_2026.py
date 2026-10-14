@@ -672,11 +672,18 @@ You are validating an image for a Kolkata Durga Puja tourism dataset.
 Pandal context:
 {context}
 
-Determine whether the image is actually a photograph of a Durga Puja pandal,
-Durga idol/mandap, puja decoration/entrance, or a clear view of the puja venue.
-Reject sponsor advertisements, committee portraits, selfies, generic people-only
-photos, generic road/city photos, logos, posters, flyers, QR codes, screenshots,
-memes, or unrelated celebrations.
+Determine whether the image features a photograph of a Durga Puja pandal 
+(exterior or interior architecture, ceiling artwork, theme installations, 
+decorations), Durga idol/mandap, entrance, or clear view of the venue.
+
+CRITICAL RULE: You MUST ACCEPT the image if it shows any legitimate part of 
+a pandal or idol — including abstract interior decor, theme artwork, lighting, 
+or close-up structures — EVEN IF the image includes overlaid text, festival 
+announcements, committee logos, or watermarks.
+
+REJECT ONLY IF: The image is purely a sponsor advertisement, a committee member 
+portrait, a generic selfie, a generic road photo, a purely text-based flyer with 
+no idol/pandal, or an unrelated meme.
 
 Return JSON only:
 {{
