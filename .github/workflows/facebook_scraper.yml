@@ -33,6 +33,7 @@ jobs:
         run: python collectors/scrape_pandal_facebook_updates_2026.py
 
       - name: Commit and Push Locally
+        if: always()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -40,6 +41,7 @@ jobs:
           git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update Facebook data [skip ci]" && git push)
 
       - name: Push to MCP Server Repository
+        if: always()
         uses: dmnemec/copy_file_to_another_repo_action@main
         env:
           API_TOKEN_GITHUB: ${{ secrets.TARGET_REPO_TOKEN }}
