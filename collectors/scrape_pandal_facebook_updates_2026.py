@@ -60,7 +60,7 @@ FRESHNESS_DAYS = 1
 MAX_IMAGES_PER_PANDAL = 4
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_IMAGE_URLS_FROM_DETAIL = 10
-MAX_VISION_REQUESTS_DEFAULT = 20
+MAX_VISION_REQUESTS_DEFAULT = 100
 VISION_CONFIDENCE_THRESHOLD = 0.80
 MAX_API_RETRIES = 2
 RATE_LIMIT_BUFFER_SECONDS = 2
@@ -1327,11 +1327,28 @@ def main() -> int:
             else:
                 print(f"  media_detail_error={detail_result.get('error')}")
 
+        # Fetch previously saved images for this pandal
+        old_record = previous.get(pandal_id, {})
+        existing_images = old_record.get("images", []) if isinstance(old_record, dict) else []
+
+        # Deduplicate using SHA256 hash (prioritizing newly approved images first)
+        seen_digests = {img.get("sha256") for img in approved if img.get("sha256")}
+        combined_images = list(approved)
+
+        for old_img in existing_images:
+            digest = old_img.get("sha256")
+            if digest and digest not in seen_digests:
+                seen_digests.add(digest)
+                combined_images.append(old_img)
+
+        # Cap total stored images to MAX_IMAGES_PER_PANDAL (4)
+        final_images = combined_images[:MAX_IMAGES_PER_PANDAL]
+
         current["latest_update"] = latest_update
         current["latest_announcement"] = latest_update
         current["latest_post_date"] = post_dt.isoformat()
         current["latest_post_url"] = post_url
-        current["images"] = approved
+        current["images"] = final_images
         current["pending_images"] = pending
         current["scrape_status"] = "success"
         records_by_id[pandal_id] = current
@@ -1351,7 +1368,7 @@ def main() -> int:
 
         print(
             f"  status=success | recent_post={post_dt.isoformat()} | "
-            f"images_found={len(candidate_urls)} | approved_images={len(approved)} | pending={len(pending)} | "
+            f"images_found={len(candidate_urls)} | approved_images={len(final_images)} | pending={len(pending)} | "
             f"post_detail_calls_total={detail_calls}"
         )
 
