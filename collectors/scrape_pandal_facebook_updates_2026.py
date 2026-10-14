@@ -62,8 +62,12 @@ MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_IMAGE_URLS_FROM_DETAIL = 10
 MAX_VISION_REQUESTS_DEFAULT = 20
 VISION_CONFIDENCE_THRESHOLD = 0.80
-MAX_API_RETRIES = 6
+MAX_API_RETRIES = 2
 RATE_LIMIT_BUFFER_SECONDS = 2
+MAX_SCRAPE_BADGER_REQUESTS = 500
+MAX_SCRAPE_BADGER_CREDITS = 500
+RESERVED_CREDITS_PER_REQUEST = 10
+CREDIT_SAFETY_MARGIN = 50
 
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
@@ -74,6 +78,27 @@ SESSION.headers.update({
     "User-Agent": "Kolkata-Puja-Tourist-MCP/1.0",
     "Accept": "application/json",
 })
+
+
+class BudgetController:
+    def __init__(self, max_requests: int, max_credits: int, reserve: int, safety: int):
+        self.max_requests = max_requests
+        self.max_credits = max_credits
+        self.reserve = reserve
+        self.safety = safety
+        self.requests = 0
+        self.credits = 0
+
+    def can_make_request(self) -> bool:
+        if self.requests >= self.max_requests:
+            return False
+        if self.credits + self.reserve > self.max_credits - self.safety:
+            return False
+        return True
+
+    def record_request(self) -> None:
+        self.requests += 1
+        self.credits += self.reserve
 
 
 def now_iso() -> str:
@@ -313,7 +338,7 @@ def parse_rate_limit_retry_after(payload: Any, response: requests.Response) -> O
     return None
 
 
-def scrapebadger_get(path: str, debug_file: Optional[Path] = None) -> Dict[str, Any]:
+def scrapebadger_get(path: str, budget: BudgetController, debug_file: Optional[Path] = None) -> Dict[str, Any]:
     api_key = os.environ.get("SCRAPEBADGER_API_KEY")
     if not api_key:
         return {"status": "config_error", "error": "SCRAPEBADGER_API_KEY is not set"}
@@ -322,6 +347,10 @@ def scrapebadger_get(path: str, debug_file: Optional[Path] = None) -> Dict[str, 
     last_error = "ScrapeBadger request failed"
 
     for attempt in range(MAX_API_RETRIES + 1):
+        if not budget.can_make_request():
+            return {"status": "budget_exhausted", "error": "Local ScrapeBadger budget exhausted"}
+        budget.record_request()
+
         try:
             response = SESSION.get(url, headers={"x-api-key": api_key}, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as exc:
@@ -335,10 +364,30 @@ def scrapebadger_get(path: str, debug_file: Optional[Path] = None) -> Dict[str, 
         if debug_file:
             atomic_write(debug_file, payload)
 
+        error_text = json.dumps(payload, ensure_ascii=False).lower() if isinstance(payload, (dict, list)) else str(payload).lower()
+        if any(term in error_text for term in (
+            "run out of api credits", "out of api credits", "insufficient credits",
+            "no credits remaining", "credit balance is zero",
+        )):
+            return {
+                "status": "credits_exhausted",
+                "http_status": response.status_code,
+                "error": str(payload),
+            }
+
         if response.status_code in {429, 500, 502, 503, 504}:
             retry_delay = parse_rate_limit_retry_after(payload, response)
             if retry_delay is None:
                 retry_delay = min(60.0, 2.0 ** attempt)
+
+            if response.status_code == 429 and retry_delay > 120:
+                return {
+                    "status": "rate_limited",
+                    "http_status": response.status_code,
+                    "error": str(payload),
+                    "retry_after_seconds": round(retry_delay),
+                }
+
             if attempt < MAX_API_RETRIES:
                 label = "rate_limited" if response.status_code == 429 else "provider_5xx"
                 print(f"  {label} ({response.status_code}) | retry {attempt + 1}/{MAX_API_RETRIES} | waiting {round(retry_delay)}s")
@@ -362,8 +411,7 @@ def scrapebadger_get(path: str, debug_file: Optional[Path] = None) -> Dict[str, 
     return {"status": "error", "error": last_error}
 
 
-
-def scrapebadger_web_scrape(target_url: str, debug_file: Optional[Path] = None) -> Dict[str, Any]:
+def scrapebadger_web_scrape(target_url: str, budget: BudgetController, debug_file: Optional[Path] = None) -> Dict[str, Any]:
     """Fallback renderer for public Facebook posts whose native media endpoint
     exposes a video attachment but no poster/image URL.
     """
@@ -372,6 +420,10 @@ def scrapebadger_web_scrape(target_url: str, debug_file: Optional[Path] = None) 
         return {"status": "config_error", "error": "SCRAPEBADGER_API_KEY is not set"}
     if not target_url or not target_url.startswith(("http://", "https://")):
         return {"status": "error", "error": "No valid post URL available for web scrape"}
+
+    if not budget.can_make_request():
+        return {"status": "budget_exhausted", "error": "Local ScrapeBadger budget exhausted"}
+    budget.record_request()
 
     endpoint = "https://scrapebadger.com/v1/web/scrape"
     request_body = {
@@ -412,14 +464,7 @@ def scrapebadger_web_scrape(target_url: str, debug_file: Optional[Path] = None) 
 
 
 def extract_image_urls_from_html(content: str) -> List[str]:
-    """Extract ONLY likely Facebook post-media images from a scraped post/video page.
-
-    Important: Facebook pages contain many generic UI assets under
-    static.xx.fbcdn.net. Those are not post media and must never be sent to
-    Groq Vision. For the video fallback we therefore require an actual
-    scontent*.fbcdn.net media host and an image/media path characteristic of
-    Facebook CDN media.
-    """
+    """Extract ONLY likely Facebook post-media images from a scraped post/video page."""
     if not content:
         return []
 
@@ -435,21 +480,15 @@ def extract_image_urls_from_html(content: str) -> List[str]:
         except Exception:
             return False
 
-        # Never accept Facebook's generic UI/static asset host.
         if host.startswith("static.") or host.startswith("external."):
             return False
 
-        # The actual post/video media observed from Facebook is served from
-        # scontent*.fbcdn.net. Keep this strict rather than treating every
-        # .webp/.jpg URL on a Facebook page as post media.
         if not host.startswith("scontent") or not host.endswith(".fbcdn.net"):
             return False
 
         if not any(ext in path for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")):
             return False
 
-        # Facebook media paths normally include a versioned /v/t... segment.
-        # This filters out miscellaneous CDN resources that happen to be images.
         if "/v/t" not in path:
             return False
 
@@ -465,9 +504,9 @@ def extract_image_urls_from_html(content: str) -> List[str]:
         seen.add(url)
         low = url.lower()
         if "/v/t15." in low:
-            score += 80  # common Facebook video media path
+            score += 80  
         if "/v/t39." in low or "/v/t51." in low:
-            score += 50  # common photo/reel media paths
+            score += 50  
         if "thumbnail" in low or "poster" in low:
             score += 20
         ranked.append((score, url))
@@ -485,7 +524,6 @@ def extract_image_urls_from_html(content: str) -> List[str]:
     for match in meta_pattern_2.finditer(decoded):
         add(match.group(1), 300)
 
-    # Secondary fallback: literal Facebook CDN media URLs embedded in JSON/scripts.
     for match in re.finditer(r'https?://[^\s"\'<>\\]+', decoded):
         url = match.group(0).rstrip("'`),]}")
         add(url, 120)
@@ -519,9 +557,10 @@ def post_detail_has_url_less_video(detail: Dict[str, Any]) -> bool:
     walk(attachments)
     return found_video and not found_url
 
-def scrape_page_posts(identifier: str, debug_raw_file: Optional[Path] = None) -> Dict[str, Any]:
+
+def scrape_page_posts(identifier: str, budget: BudgetController, debug_raw_file: Optional[Path] = None) -> Dict[str, Any]:
     encoded = quote(identifier, safe="")
-    result = scrapebadger_get(f"/pages/{encoded}/posts", debug_file=debug_raw_file)
+    result = scrapebadger_get(f"/pages/{encoded}/posts", budget, debug_file=debug_raw_file)
     if result.get("status") != "success":
         return result
     payload = result.get("payload") or {}
@@ -536,15 +575,14 @@ def scrape_page_posts(identifier: str, debug_raw_file: Optional[Path] = None) ->
     return {"status": "success", "posts": [x for x in posts if isinstance(x, dict)]}
 
 
-def scrape_single_post(post_id: str, debug_file: Optional[Path] = None) -> Dict[str, Any]:
+def scrape_single_post(post_id: str, budget: BudgetController, debug_file: Optional[Path] = None) -> Dict[str, Any]:
     """Fetch full selected-post details, especially attachments/media."""
     encoded = quote(str(post_id), safe="")
-    result = scrapebadger_get(f"/posts/{encoded}", debug_file=debug_file)
+    result = scrapebadger_get(f"/posts/{encoded}", budget, debug_file=debug_file)
     if result.get("status") != "success":
         return result
     payload = result.get("payload") or {}
     if isinstance(payload, dict):
-        # Some APIs wrap detail in a data/post field; normalize whichever is present.
         detail = payload.get("post") or payload.get("data") or payload
     else:
         detail = payload
@@ -552,13 +590,7 @@ def scrape_single_post(post_id: str, debug_file: Optional[Path] = None) -> Dict[
 
 
 def expand_facebook_thumbnail_url(url: str) -> List[str]:
-    """Return the original Facebook CDN URL plus larger-size variants.
-
-    ScrapeBadger can expose the selected post's attachment as a Facebook CDN
-    thumbnail such as ``ctp=s50x50``. That is a real image URL, but it is too
-    small for Vision. The same signed CDN URL can often be requested at a
-    larger preset by changing only the size selector.
-    """
+    """Return the original Facebook CDN URL plus larger-size variants."""
     variants = [url]
     try:
         parsed = urlparse(url)
@@ -714,10 +746,6 @@ def validate_post_images(
 
         data, error, content_type = download_image(image_url)
         if data is None:
-            # The timeline can return an apparent image URL that is actually a
-            # Facebook HTML page, expired media URL, or an unusable thumbnail.
-            # Trigger the selected-post detail endpoint so we can resolve the
-            # real attachment URL.
             needs_detail = True
             pending.append({
                 "url": image_url,
@@ -834,16 +862,9 @@ def validate_post_images(
 
     return approved[:MAX_IMAGES_PER_PANDAL], pending, used, needs_detail, vision_decisions
 
-def extract_images_from_detail(detail: Dict[str, Any]) -> List[str]:
-    """Extract post-owned attachment URLs from a ScrapeBadger single-post response.
 
-    ScrapeBadger documents ``/posts/{post_id}`` as returning a single post with
-    attachments, but the nested attachment schema is not fixed.  Inside the
-    selected post's top-level ``attachments`` subtree we therefore accept ANY
-    HTTP(S) URL and rank it instead of requiring the JSON key or URL itself to
-    look like an image.  This handles CDN URLs stored under provider-specific
-    keys such as ``uri``, ``href``, ``src_url``, etc.
-    """
+def extract_images_from_detail(detail: Dict[str, Any]) -> List[str]:
+    """Extract post-owned attachment URLs from a ScrapeBadger single-post response."""
     ranked: List[Tuple[int, str]] = []
     seen: set[str] = set()
 
@@ -868,8 +889,6 @@ def extract_images_from_detail(detail: Dict[str, Any]) -> List[str]:
         return score
 
     def extract_embedded_urls(text: str) -> List[str]:
-        # Attachment values are occasionally returned as JSON-ish strings or
-        # strings containing one or more escaped URLs.
         urls = re.findall(r'https?://[^\s"\\<>]+', text)
         cleaned: List[str] = []
         for u in urls:
@@ -884,8 +903,6 @@ def extract_images_from_detail(detail: Dict[str, Any]) -> List[str]:
             return
         if url in seen:
             return
-        # Require an actual URL, but do NOT require it to look like an image.
-        # The attachment subtree is already scoped to the selected post.
         seen.add(url)
         ranked.append((url_score(url, key_l, base_score), url))
 
@@ -921,8 +938,6 @@ def extract_images_from_detail(detail: Dict[str, Any]) -> List[str]:
 
     attachments = detail.get("attachments") if isinstance(detail, dict) else None
     if attachments is not None:
-        # If the provider ever serializes the attachment object as a JSON string,
-        # decode it before walking it.
         if isinstance(attachments, str):
             parsed_attachments: Any = attachments
             try:
@@ -933,8 +948,6 @@ def extract_images_from_detail(detail: Dict[str, Any]) -> List[str]:
         else:
             walk(attachments, 250, "attachments")
 
-    # Fallback for provider versions that expose post media under a dedicated
-    # top-level field. Never recurse through author/page metadata here.
     if not ranked and isinstance(detail, dict):
         allowed_top_level = {
             "media", "photos", "images", "image", "photo", "gallery",
@@ -947,6 +960,7 @@ def extract_images_from_detail(detail: Dict[str, Any]) -> List[str]:
 
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [url for _, url in ranked[:MAX_IMAGE_URLS_FROM_DETAIL]]
+
 
 def build_payload(records_by_id: Dict[str, Dict[str, Any]], freshness_days: int, vision_enabled: bool) -> Dict[str, Any]:
     return {
@@ -1017,6 +1031,13 @@ def main() -> int:
     if not isinstance(cache, dict):
         cache = {}
 
+    budget = BudgetController(
+        max_requests=MAX_SCRAPE_BADGER_REQUESTS,
+        max_credits=MAX_SCRAPE_BADGER_CREDITS,
+        reserve=RESERVED_CREDITS_PER_REQUEST,
+        safety=CREDIT_SAFETY_MARGIN
+    )
+
     print(f"Pages selected: {len(selected)}")
     print(f"Groq vision enabled: {bool(vision_client)}")
 
@@ -1036,7 +1057,7 @@ def main() -> int:
         current["last_scraped_at"] = now_iso()
 
         raw_page_file = RAW_DIR / f"{pandal_id}_page_posts.json" if args.debug_raw else None
-        page_result = scrape_page_posts(identifier, debug_raw_file=raw_page_file)
+        page_result = scrape_page_posts(identifier, budget, debug_raw_file=raw_page_file)
         if page_result.get("status") != "success":
             failed += 1
             old = previous.get(pandal_id)
@@ -1050,6 +1071,21 @@ def main() -> int:
                 current["last_error"] = page_result.get("error")
             records_by_id[pandal_id] = current
             print(f"  status={current['scrape_status']} | error={current.get('last_error')}")
+
+            if page_result.get("status") in {"credits_exhausted", "rate_limited", "budget_exhausted"}:
+                atomic_write(args.output, build_payload(records_by_id, args.freshness_days, bool(vision_client)))
+                atomic_write(CACHE_FILE, cache)
+                if page_result.get("status") == "credits_exhausted":
+                    print("\nStopping: ScrapeBadger reports that API credits are exhausted.")
+                    print("No further pages will be requested. Restore credits before rerunning.")
+                elif page_result.get("status") == "budget_exhausted":
+                    print("\nStopping: Local ScrapeBadger budget limit reached.")
+                    print("No further requests will be made. Progress has been saved.")
+                else:
+                    wait_seconds = page_result.get("retry_after_seconds")
+                    print(f"\nStopping: ScrapeBadger rate limit reset is too far away to wait inline ({wait_seconds}s).")
+                    print("Progress has been saved. Rerun later when the provider limit resets.")
+                break
             continue
 
         normalized = [normalize_post(x) for x in page_result.get("posts") or []]
@@ -1074,13 +1110,10 @@ def main() -> int:
             print(f"  status=success_no_recent_post | newest_post={post_dt.isoformat()} | window_days={args.freshness_days} | posts_returned={len(normalized)}")
             continue
 
-        # Announcement/update comes directly from the selected timeline post.
-        # This remains populated even when there is no usable image.
         latest_update = selected_post.get("post_text")
         post_url = selected_post.get("post_url")
         post_id = selected_post.get("id")
 
-        # Prefer direct CDN media already exposed by the timeline response.
         candidate_urls = [
             u for u in selected_post.get("image_urls") or []
             if direct_image_candidate(u)
@@ -1099,13 +1132,26 @@ def main() -> int:
         vision_remaining -= used
         vision_total += used
 
-        # A timeline candidate can exist but still be unusable (e.g. a
-        # photo.php HTML page, expired CDN URL, or tiny thumbnail). Only then
-        # resolve the selected post through ScrapeBadger's post-details API.
         if post_id and needs_detail:
             detail_file = RAW_DIR / f"{pandal_id}_post_{post_id}.json" if args.debug_raw else None
-            detail_result = scrape_single_post(post_id, debug_file=detail_file)
+            detail_result = scrape_single_post(post_id, budget, debug_file=detail_file)
             detail_calls += 1
+            
+            if detail_result.get("status") == "budget_exhausted":
+                old = previous.get(pandal_id)
+                if old:
+                    current = dict(old)
+                    current["scrape_status"] = "stale"
+                    current["last_error"] = "budget_exhausted"
+                else:
+                    current["scrape_status"] = "budget_exhausted"
+                    current["last_error"] = "budget_exhausted"
+                current["last_scraped_at"] = now_iso()
+                records_by_id[pandal_id] = current
+                atomic_write(args.output, build_payload(records_by_id, args.freshness_days, bool(vision_client)))
+                atomic_write(CACHE_FILE, cache)
+                print("\nStopping: Local ScrapeBadger budget exhausted during post detail fetch.")
+                break
 
             if detail_result.get("status") == "success":
                 detail = detail_result.get("post") or {}
@@ -1160,10 +1206,6 @@ def main() -> int:
                             print(f"    media_hint={hint}")
 
                 if not detail_urls and post_detail_has_url_less_video(detail):
-                    # Native Facebook Video attachment has no URL/poster in the dedicated
-                    # response. Try several public URL forms for the *same selected post/video*
-                    # through ScrapeBadger's generic web scraper. Facebook sometimes returns
-                    # a not_found result for one URL shape while another public shape resolves.
                     current.setdefault("media_resolution", {})["video_web_fallback"] = True
 
                     attachment_ids: List[str] = []
@@ -1198,29 +1240,30 @@ def main() -> int:
                             seen_targets.add(normalized)
                             web_targets.append(normalized)
 
-                    # 1) Provider's permalink first.
                     add_web_target(post_url)
 
-                    # 2) Canonical Page post URL reconstructed from our verified Page identifier.
                     if post_id:
                         fb_web_identifier = extract_facebook_identifier(str(page_url))
                         add_web_target(f"https://www.facebook.com/{fb_web_identifier}/posts/{post_id}")
                         add_web_target(f"https://facebook.com/{fb_web_identifier}/posts/{post_id}")
 
-                    # 3) Native video URL shapes from the attachment id.
                     for vid in attachment_ids[:3]:
                         add_web_target(f"https://www.facebook.com/watch/?v={vid}")
                         add_web_target(f"https://www.facebook.com/video.php?v={vid}")
                         add_web_target(f"https://www.facebook.com/{fb_web_identifier}/videos/{vid}")
 
                     last_web_error: Optional[str] = None
-                    for target_index, web_target in enumerate(web_targets[:6]):
+                    is_budget_exhausted = False
+                    for target_index, web_target in enumerate(web_targets[:3]):
                         web_file = (
                             RAW_DIR / f"{pandal_id}_post_web_media_{target_index}.json"
                             if args.debug_raw else None
                         )
                         web_media_calls += 1
-                        web_result = scrapebadger_web_scrape(web_target, debug_file=web_file)
+                        web_result = scrapebadger_web_scrape(web_target, budget, debug_file=web_file)
+                        if web_result.get("status") == "budget_exhausted":
+                            is_budget_exhausted = True
+                            break
                         if web_result.get("status") == "success":
                             web_urls = extract_image_urls_from_html(web_result.get("content") or "")
                             if web_urls:
@@ -1234,6 +1277,22 @@ def main() -> int:
                         else:
                             last_web_error = web_result.get("error")
                             print(f"  video_post_web_media_attempt={target_index + 1} | url={web_target} | error={last_web_error}")
+                    
+                    if is_budget_exhausted:
+                        old = previous.get(pandal_id)
+                        if old:
+                            current = dict(old)
+                            current["scrape_status"] = "stale"
+                            current["last_error"] = "budget_exhausted"
+                        else:
+                            current["scrape_status"] = "budget_exhausted"
+                            current["last_error"] = "budget_exhausted"
+                        current["last_scraped_at"] = now_iso()
+                        records_by_id[pandal_id] = current
+                        atomic_write(args.output, build_payload(records_by_id, args.freshness_days, bool(vision_client)))
+                        atomic_write(CACHE_FILE, cache)
+                        print("\nStopping: Local ScrapeBadger budget exhausted during video web fallback.")
+                        break
 
                     if not detail_urls:
                         current.setdefault("media_resolution", {})["web_scrape_error"] = last_web_error or "No video poster/image found"
@@ -1253,8 +1312,6 @@ def main() -> int:
                     vision_remaining -= used2
                     vision_total += used2
 
-                    # The post-detail response is the authoritative fallback
-                    # for media. Prefer it whenever it provides candidates.
                     approved = approved2
                     pending = pending2
                     vision_decisions.extend(detail_vision_decisions)
@@ -1299,13 +1356,14 @@ def main() -> int:
     atomic_write(CACHE_FILE, cache)
 
     print("\nCompleted")
-    print(f"  Successful pages       : {successful}")
-    print(f"  Pages with no recent post: {no_recent}")
-    print(f"  API failures           : {failed}")
-    print(f"  Single-post detail calls: {detail_calls}")
+    print(f"  ScrapeBadger budget used  : {budget.requests} requests, {budget.credits} credits reserved")
+    print(f"  Successful pages          : {successful}")
+    print(f"  Pages with no recent post : {no_recent}")
+    print(f"  API failures              : {failed}")
+    print(f"  Single-post detail calls  : {detail_calls}")
     print(f"  Video-page media fallbacks: {web_media_calls}")
-    print(f"  Vision calls            : {vision_total}")
-    print(f"  Output                  : {args.output}")
+    print(f"  Vision calls              : {vision_total}")
+    print(f"  Output                    : {args.output}")
     return 0 if successful or no_recent else 2
 
 
