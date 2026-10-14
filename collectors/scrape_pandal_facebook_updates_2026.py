@@ -57,7 +57,7 @@ YEAR = 2026
 SCRAPEBADGER_BASE_URL = "https://scrapebadger.com/v1/facebook"
 REQUEST_TIMEOUT = 60
 FRESHNESS_DAYS = 1
-MAX_IMAGES_PER_PANDAL = 1
+MAX_IMAGES_PER_PANDAL = 4
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_IMAGE_URLS_FROM_DETAIL = 10
 MAX_VISION_REQUESTS_DEFAULT = 20
@@ -791,7 +791,8 @@ def validate_post_images(
                     "reason": cached.get("reason"),
                     "approved_at": cached.get("approved_at") or now_iso(),
                 })
-                break
+                if len(approved) >= MAX_IMAGES_PER_PANDAL:
+                    break
 
             if cached and cached.get("decision") == "rejected":
                 continue
@@ -865,7 +866,8 @@ def validate_post_images(
                 "reason": reason,
                 "approved_at": now_iso(),
             })
-            break
+            if len(approved) >= MAX_IMAGES_PER_PANDAL:
+                break
 
     return approved[:MAX_IMAGES_PER_PANDAL], pending, used, needs_detail, vision_decisions
 
